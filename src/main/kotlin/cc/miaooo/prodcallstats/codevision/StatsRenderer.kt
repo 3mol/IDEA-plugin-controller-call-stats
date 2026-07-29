@@ -1,5 +1,6 @@
 package cc.miaooo.prodcallstats.codevision
 
+import cc.miaooo.prodcallstats.gateway.GatewayException
 import cc.miaooo.prodcallstats.psi.HandlerMethod
 import cc.miaooo.prodcallstats.settings.StatsSettingsState
 import cc.miaooo.prodcallstats.stats.CallStats
@@ -22,6 +23,13 @@ object StatsRenderer {
         return "#5BA46B"
     }
 
+    fun errorLine(handler: HandlerMethod, error: GatewayException): String = when (error) {
+        is GatewayException.TokenExpired -> "🔥⚠ Prod: token invalid (open Settings)"
+        is GatewayException.NotFound -> "🔥 Prod: no data"
+        is GatewayException.HttpStatus -> "🔥⚠ Prod: HTTP ${error.status}"
+        is GatewayException.Unreachable -> "🔥⚠ Prod: gateway unreachable"
+    }
+
     fun mainLine(handler: HandlerMethod, stats: CallStats?): String {
         val settings = StatsSettingsState.getInstance()
         if (stats == null) return "🔥 Prod: loading…"
@@ -42,7 +50,16 @@ object StatsRenderer {
         }
     }
 
-    fun tooltip(handler: HandlerMethod, stats: CallStats?): String {
+    fun tooltip(handler: HandlerMethod, stats: CallStats?, error: GatewayException? = null): String {
+        if (error != null) {
+            val msg = when (error) {
+                is GatewayException.TokenExpired -> "API token invalid or expired"
+                is GatewayException.NotFound -> "No stats collected for this method"
+                is GatewayException.HttpStatus -> "HTTP ${error.status}: ${error.message}"
+                is GatewayException.Unreachable -> "Gateway unreachable: ${error.message}"
+            }
+            return "<html><b>${escape(handler.sign)}</b><br>$msg</html>"
+        }
         if (stats == null) {
             return "<html><b>${escape(handler.sign)}</b><br>loading…</html>"
         }

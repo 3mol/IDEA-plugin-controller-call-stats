@@ -99,10 +99,12 @@ class SpringControllerStatsProvider : CodeVisionProvider<PsiFile?> {
         }
 
         val entries = handlers.map { (range, hm) ->
-            val stats = StatsCacheService.getInstance().getNow(hm)
-            val text = StatsRenderer.mainLine(hm, stats)
-            val tip = StatsRenderer.tooltip(hm, stats)
-            log.warn("[PCS] entry sign=${hm.sign} stats=$stats")
+            val cache = StatsCacheService.getInstance()
+            val stats = cache.getNow(hm)
+            val error = cache.getError(hm)
+            val text = if (error != null) StatsRenderer.errorLine(hm, error) else StatsRenderer.mainLine(hm, stats)
+            val tip = StatsRenderer.tooltip(hm, stats, error)
+            log.warn("[PCS] entry sign=${hm.sign} stats=$stats error=${error?.javaClass?.simpleName}")
             range to entry(text, tip)
         }
         log.warn("[PCS] computeCodeVision -> returning ${entries.size} entries")

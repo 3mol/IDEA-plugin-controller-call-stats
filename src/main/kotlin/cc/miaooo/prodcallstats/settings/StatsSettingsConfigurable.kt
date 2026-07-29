@@ -1,10 +1,12 @@
 package cc.miaooo.prodcallstats.settings
 
 import cc.miaooo.prodcallstats.ProdCallStatsBundle
+import cc.miaooo.prodcallstats.codevision.ScheduleFetcherTask
 import cc.miaooo.prodcallstats.gateway.GatewayClient
 import cc.miaooo.prodcallstats.stats.StatsCacheService
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.util.concurrency.AppExecutorUtil
@@ -42,6 +44,13 @@ class StatsSettingsConfigurable : Configurable {
 
     override fun apply() {
         val p = panel ?: return
+        // Only wipe cache when fields that change WHAT we fetch change.
+        // Cosmetic fields (verbose, thresholds, refresh interval) just need a re-render.
+        val sourceChanged = p.useMock != state.useMock ||
+            p.environment != state.environment ||
+            p.gatewayUrl.trim() != state.gatewayUrl ||
+            p.apiToken != state.apiToken
+
         state.enabled = p.isEnabled
         state.useMock = p.useMock
         state.environment = p.environment
@@ -53,7 +62,20 @@ class StatsSettingsConfigurable : Configurable {
         state.p99ErrorMillis = p.p99ErrorMillis
         state.errorRateWarnPercent = p.errorRateWarnPercent
         state.errorRateErrorPercent = p.errorRateErrorPercent
-        StatsCacheService.getInstance().invalidateAll()
+
+        if (sourceChanged) {
+            StatsCacheService.getInstance().invalidateAll()
+        }
+        // Always re-render so the user sees new verbose / threshold values immediately.
+        refreshOpenEditors()
+    }
+
+    private fun refreshOpenEditors() {
+        for (project in ProjectManager.getInstance().openProjects) {
+            for (file in FileEditorManager.getInstance(project).openFiles) {
+                ScheduleFetcherTask.invalidateCodeVision(project, file)
+            }
+        }
     }
 
     override fun reset() {
