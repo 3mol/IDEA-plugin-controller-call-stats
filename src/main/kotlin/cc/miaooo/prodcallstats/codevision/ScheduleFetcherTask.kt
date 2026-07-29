@@ -11,6 +11,7 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.PsiClass
@@ -80,9 +81,17 @@ object ScheduleFetcherTask {
      * for our provider. Uses [CodeVisionHost.invalidateProvider] which is the
      * official refresh signal — DaemonCodeAnalyzer.restart() does not always
      * reach Code Vision.
+     *
+     * Safe to call during project indexing — if the project is in dumb mode,
+     * the refresh is deferred until indexing finishes via [DumbService.runWhenSmart].
      */
     fun invalidateCodeVision(project: Project, vFile: VirtualFile?) {
-        if (vFile == null) return
+        if (vFile == null || project.isDisposed) return
+        if (DumbService.isDumb(project)) {
+            log.warn("[PCS] invalidateCodeVision: project in dumb mode, deferring for ${vFile.name}")
+            DumbService.getInstance(project).runWhenSmart { invalidateCodeVision(project, vFile) }
+            return
+        }
         val document = FileDocumentManager.getInstance().getDocument(vFile) ?: return
         val editors: Array<Editor> = EditorFactory.getInstance().getEditors(document, project)
         if (editors.isEmpty()) {

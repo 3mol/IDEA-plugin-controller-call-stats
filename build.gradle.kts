@@ -33,6 +33,6 @@ intellijPlatform {
 // The task spins up a headless IDE to harvest Settings search text. It tends
 // to throw H2 MVStoreException on shutdown (platform bug, unrelated to our
 // plugin) and we don't need custom search entries during dev.
-tasks.named("buildSearchableOptions") {
-    enabled = false
-}
+//tasks.named("buildSearchableOptions") {
+//    enabled = false
+//}

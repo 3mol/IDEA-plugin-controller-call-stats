@@ -10,9 +10,10 @@ import com.intellij.codeInsight.codeVision.CodeVisionProvider
 import com.intellij.codeInsight.codeVision.CodeVisionRelativeOrdering
 import com.intellij.codeInsight.codeVision.CodeVisionState
 import com.intellij.codeInsight.codeVision.ui.model.TextCodeVisionEntry
-import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.TextRange
 import com.intellij.psi.PsiClass
@@ -62,31 +63,43 @@ class SpringControllerStatsProvider : CodeVisionProvider<PsiFile?> {
             return CodeVisionState.Ready(emptyList())
         }
 
-        // CodeVisionHost runs us on a pooled thread — PSI access requires a read action.
-        val handlers: List<Pair<TextRange, HandlerMethod>> = ReadAction.compute<List<Pair<TextRange, HandlerMethod>>, Throwable> {
-            val acc = mutableListOf<Pair<TextRange, HandlerMethod>>()
-            var classCount = 0
-            var controllerCount = 0
-            PsiTreeUtil.processElements(file, PsiClass::class.java) { cls ->
-                classCount++
-                if (!SpringControllerScanner.isController(cls)) return@processElements true
-                controllerCount++
-                val clsName = cls.qualifiedName ?: cls.name ?: "<anon>"
-                log.warn("[PCS] found controller: $clsName")
-                cls.methods.forEach method@{ m ->
-                    val hm = SpringControllerScanner.resolve(m)
-                    if (hm == null) {
-                        log.warn("[PCS]   - ${m.name}() -> no @*Mapping annotation, skipped")
-                        return@method
+        // CodeVisionHost runs us on a pooled thread — PSI access requires a read
+        // action, and annotation FQN resolution requires indices, so wait for
+        // smart mode. IndexNotReadyException would otherwise bubble up and the
+        // whole provider would silently stop rendering.
+        val project = editor.project ?: file.project
+        val handlers: List<Pair<TextRange, HandlerMethod>> = try {
+            DumbService.getInstance(project).runReadActionInSmartMode<List<Pair<TextRange, HandlerMethod>>> {
+                val acc = mutableListOf<Pair<TextRange, HandlerMethod>>()
+                var classCount = 0
+                var controllerCount = 0
+                PsiTreeUtil.processElements(file, PsiClass::class.java) { cls ->
+                    classCount++
+                    if (!SpringControllerScanner.isController(cls)) return@processElements true
+                    controllerCount++
+                    val clsName = cls.qualifiedName ?: cls.name ?: "<anon>"
+                    log.warn("[PCS] found controller: $clsName")
+                    cls.methods.forEach method@{ m ->
+                        val hm = SpringControllerScanner.resolve(m)
+                        if (hm == null) {
+                            log.warn("[PCS]   - ${m.name}() -> no @*Mapping annotation, skipped")
+                            return@method
+                        }
+                        val ident = m.nameIdentifier ?: return@method
+                        log.warn("[PCS]   - ${m.name}() -> sign=${hm.sign} url=${hm.urlTemplate} method=${hm.httpMethod}")
+                        acc += ident.textRange to hm
                     }
-                    val ident = m.nameIdentifier ?: return@method
-                    log.warn("[PCS]   - ${m.name}() -> sign=${hm.sign} url=${hm.urlTemplate} method=${hm.httpMethod}")
-                    acc += ident.textRange to hm
+                    true
                 }
-                true
+                log.warn("[PCS] scan summary: classes=$classCount controllers=$controllerCount handlers=${acc.size}")
+                acc
             }
-            log.warn("[PCS] scan summary: classes=$classCount controllers=$controllerCount handlers=${acc.size}")
-            acc
+        } catch (e: IndexNotReadyException) {
+            log.warn("[PCS] computeCodeVision -> index not ready, returning NotReady (platform will retry): ${e.message}")
+            return CodeVisionState.NotReady
+        } catch (e: Throwable) {
+            log.warn("[PCS] computeCodeVision -> scan failed: ${e.javaClass.simpleName}: ${e.message}")
+            return CodeVisionState.Ready(emptyList())
         }
 
         if (handlers.isEmpty()) {
