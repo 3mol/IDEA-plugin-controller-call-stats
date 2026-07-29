@@ -1,33 +1,53 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
-    <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
     <id>cc.miaooo.prod-call-stats</id>
 
-    <!-- Public plugin name should be written in Title Case.
-     Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-name -->
-    <name>Prod-call-stats</name>
+    <name>Prod Call Stats</name>
 
-    <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
-    <vendor url="https://www.yourcompany.com">YourCompany</vendor>
+    <vendor url="https://github.com/miaooo">miaooo</vendor>
 
-    <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
-         Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
     <description><![CDATA[
-        Enter short description for your plugin here.<br>
-        <em>most HTML tags may be used</em>
+        Display production call statistics (today / 7-day calls, P99 latency, error rate) above
+        Spring MVC Controller methods using Code Vision. Click the badge to refresh;
+        configure gateway URL, token and thresholds in <b>Settings | Tools | Prod Call Stats</b>.<br>
+        When no gateway URL is configured, sample data is rendered for testing.
         ]]></description>
 
-    <!-- Product and plugin compatibility requirements.
-         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
 
-    <resource-bundle>messages.MyMessageBundle</resource-bundle>
+    <resource-bundle>messages.ProdCallStatsBundle</resource-bundle>
 
-    <!-- Extensions defined by the plugin.
-         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow id="MyToolWindow" factoryClass="cc.miaooo.MyToolWindowFactory"
-                    icon="AllIcons.Toolwindows.ToolWindowPalette"/>
+        <!-- Code Vision registration.
+             The EP qualified name is `com.intellij.codeInsight.codeVisionProvider`
+             (note the `.codeInsight.` segment), so the element name under the
+             `com.intellij` defaultExtensionNs is `codeInsight.codeVisionProvider`. -->
+        <codeInsight.codeVisionProvider
+            implementation="cc.miaooo.prodcallstats.codevision.SpringControllerStatsProvider"
+            order="first"/>
+
+        <!-- Settings panel -->
+        <applicationConfigurable
+            id="prodcallstats.settings"
+            groupId="tools"
+            bundle="messages.ProdCallStatsBundle"
+            key="settings.display.name"
+            instance="cc.miaooo.prodcallstats.settings.StatsSettingsConfigurable"/>
+
+        <!-- Persistent state -->
+        <applicationService
+            serviceImplementation="cc.miaooo.prodcallstats.settings.StatsSettingsState"/>
+
+        <!-- Background cache service -->
+        <applicationService
+            serviceImplementation="cc.miaooo.prodcallstats.stats.StatsCacheService"/>
+
+        <!-- Notification group -->
+        <notificationGroup id="Prod Call Stats" displayType="STICKY_BALLOON"/>
+
+        <!-- Logs Code Vision registration state on project open -->
+        <postStartupActivity
+            implementation="cc.miaooo.prodcallstats.bootstrap.ProdCallStatsStartupActivity"/>
     </extensions>
-    
 </idea-plugin>
