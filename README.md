@@ -1,147 +1,311 @@
-# Prod-call-stats
+# Prod Call Stats
 
-[![Twitter Follow](https://img.shields.io/badge/follow-%40JBPlatform-1DA1F2?logo=twitter)](https://twitter.com/JBPlatform)
-[![Developers Forum](https://img.shields.io/badge/JetBrains%20Platform-Join-blue)][jb:forum]
-
-## Overview
-
-This repository implements an IntelliJ Platform plugin.
-
-## Demo Functionality
-
-The sample plugin adds a `My Tool Window` tool window with a simple functionality of shuffling a random number.
-
-## Plugin structure
-
-A generated project contains the following content structure:
+在 IntelliJ IDEA 里给 Spring MVC Controller 方法**上方**渲染生产调用指标（今日调用量 / 7 日调用量 / P99 / 错误率等），基于 Code Vision 实现。
 
 ```
-.
-├── .run/                   Predefined Run/Debug Configurations
-├── gradle
-│   ├── wrapper/            Gradle Wrapper
-│   ├── libs.versions.toml  Version catalog
-├── src                     Plugin sources
-│   └── main
-│       ├── kotlin/         Kotlin production sources
-│       └── resources/      Plugin resources
-│           ├── META-INF/   Plugin configuration file and logo
-│           └── messages/   Message bundles
-├── .gitignore              Git ignoring rules
-├── build.gradle.kts        Gradle build configuration
-├── gradle.properties       Gradle configuration properties
-├── gradlew                 *nix Gradle Wrapper script
-├── gradlew.bat             Windows Gradle Wrapper script
-├── README.md               This file
-└── settings.gradle.kts     Gradle project settings
+🔥 Prod: 12,345 today ｜ 98.0K 7d ｜ P99 120ms ｜ Err 0.10%
+@GetMapping("/users/{id}")
+public UserDTO getUser(@PathVariable Long id) { ... }
 ```
 
-In addition to the configuration files, the most crucial part is the `src` directory, which contains our implementation and the manifest for our plugin – [plugin.xml][file:plugin.xml].
+- 兼容 IDEA 2024.3+（`sinceBuild=243`，不限上限）
+- 支持 `@Controller` / `@RestController` + `@*Mapping` 系列注解
+- 默认 **mock 模式**：不配置网关也能看到 Code Vision 效果（按方法签名稳定的随机数）
+- 配上网关后切换为真实数据，支持单查 + 批量查询
 
-> [!NOTE]
-> To use Java in your plugin, create the `/src/main/java` directory.
+---
 
-The plugin logo is placed in `src/main/resources/META-INF/pluginIcon.svg`.
-See [Plugin Logo][docs:logo] for more information and logo requirements.
+## 目录
 
-## Build script
+- [安装](#安装)
+- [使用方式](#使用方式)
+- [配置](#配置)
+- [构建与开发](#构建与开发)
+- [本地启动 IDE 测试](#本地启动-ide-测试runIde)
+- [打包并导入 IDEA](#打包并导入-idea)
+- [项目结构](#项目结构)
+- [故障排查](#故障排查)
 
-The [build.gradle.kts][file:build.gradle.kts] is the core of the project definition.
-It applies three Gradle plugins:
+---
 
-| Plugin                             | Description                                                                      |
-|------------------------------------|----------------------------------------------------------------------------------|
-| `org.jetbrains.kotlin.jvm`         | Adds Kotlin support                                                              |
-| `org.jetbrains.changelog`          | Simplifies patching the [CHANGELOG.md][file:CHANGELOG.md] file                   |
-| `org.jetbrains.intellij.platform`  | The [IntelliJ Platform Gradle Plugin][docs:intellij-platform-gradle-plugin-docs] |
+## 安装
 
-The `intellijPlatform` dependencies block selects the IDE to compile against:
+### 方式一：从磁盘安装（推荐，适用于内部发布）
 
-```kotlin
-intellijIdea("2025.3.5")
+1. 拿到打包好的 `prod-call-stats-*.zip`（见 [打包并导入 IDEA](#打包并导入-idea)）
+2. 打开 IDEA → `Settings/Preferences` → `Plugins`
+3. 右上角齿轮图标 → `Install Plugin from Disk...`
+4. 选择 zip 文件 → 重启 IDE
+
+### 方式二：开发模式（`runIde`）
+
+见 [本地启动 IDE 测试](#本地启动-ide-测试runIde)。
+
+---
+
+## 使用方式
+
+1. 打开任意包含 Spring MVC Controller 的 Java 项目
+2. 在编辑器里打开 Controller 类
+3. 每个 `@GetMapping/@PostMapping/@*Mapping` 方法上方会自动出现：
+
+   ```
+   🔥 Prod: 1.2K today ｜ 12.3K 7d ｜ P99 320ms ｜ Err 0.20%
+   ```
+
+4. 鼠标悬停在文字上 → 弹出 tooltip，显示完整延迟分布（Min / Avg / Max / P99）+ 方法签名
+5. 单击 Code Vision 文字 → 强制刷新该方法指标
+
+> **默认是 mock 数据**：没配置网关时，渲染的是按 `className#methodName` 签名 hash 出来的稳定随机数，每分钟刷新一次。这是为了让用户在不连后端的情况下也能看到效果。
+
+---
+
+## 配置
+
+`Settings | Tools | Prod Call Stats`
+
+| 配置项 | 说明 | 默认值 |
+|---|---|---|
+| **Enable** | 总开关 | ✅ on |
+| **Use mock data** | 用随机数据，不发起网络请求 | ✅ on |
+| **Environment** | `prod` / `pre` | `prod` |
+| **Gateway URL** | 后端网关地址（如 `https://stats.internal`），留空走 mock | 空 |
+| **API Token** | 网关 `X-Api-Token` 请求头 | 空 |
+| **Refresh interval** | 缓存 TTL（秒，最小 30） | 60 |
+| **Verbose** | 主行也显示 Min/Avg/Max | off |
+| **P99 warn / error** | 超过该值时主行加 ⚠ 提示 | 500 / 2000 |
+| **Error rate warn / error** | 错误率阈值（%） | 0.1 / 1.0 |
+
+**Test Connection** 按钮：调一次 `/api/v1/health` 验证网关 + token 可达。
+
+### 切到真实数据
+
+1. 关掉 `Use mock data`
+2. 填入 `Gateway URL` 和 `API Token`
+3. 点 `Test Connection` 验证
+4. 应用 → 已打开的 Controller 文件会在下一次 Code Vision 重渲染时拉取真实数据
+
+### 网关接口契约
+
+签名格式：`<类全限定名>#<方法名>`，例如：
+
+```
+com.codo.tech.creeks.allocation.api.AllocationInnerController#page
 ```
 
-See [Target Versions][docs:target-version] for more information.
+**单查**
 
-The `intellijPlatform` dependencies block also contains a dependency on the platform testing framework:
+```
+GET {gateway}/api/v1/call-stats?sign={URL-encoded sign}&env={prod|pre}
+Header: X-Api-Token: {token}
 
-```kotlin
-testFramework(TestFrameworkType.Platform)
+Response 200:
+{
+  "today": 12345,
+  "week": 98000,
+  "p99Millis": 120,
+  "maxExecuteTimeRequired": 350,
+  "minExecuteTimeRequired": 12,
+  "avgExecuteTimeRequired": 95,
+  "errorRate": 0.0001,
+  "fetchedAt": 1722200000000
+}
 ```
 
-See [Testing][docs:testing] for more information
+**批量查询**（打开一个 Controller 文件时优先走这个，降低 QPS）
 
-## Plugin configuration file
+```
+POST {gateway}/api/v1/call-stats/batch
+Header: X-Api-Token: {token}
+Body: { "env": "prod", "signs": ["com.x.Y#m1", "com.x.Y#m2"] }
 
-The plugin configuration file is a [plugin.xml][file:plugin.xml] file located in the `src/main/resources/META-INF` directory.
-It provides general information about the plugin, its dependencies, extensions, and listeners.
+Response 200:
+{
+  "results": { "com.x.Y#m1": { ...同单查字段... }, ... },
+  "missed": [ ... ]
+}
+```
 
-You can read more about this file in the [Plugin Configuration File][docs:plugin.xml] section of our documentation.
+错误码：`401` token 失效；`404` 该方法无统计数据。
 
-### Plugin ID and name
+---
 
-Generated plugin ID and name may require adjustment.
+## 构建与开发
 
-These values are generated based on _Group ID_ and _Artifact ID_ provided in the IDE Plugin wizard.
-It is recommended to review `<id>` and `<name>` elements in the plugin.xml file, and adjust them if needed.
+### 环境要求
 
-Please note that Gradle properties `rootProject.name` and `project.group` don't need to match the `<id>` and `<name>` elements.
-There is no IntelliJ Platform-related reason they should as they serve different functions.
+- JDK 17+（推荐 JDK 21+，IDEA 自带 JBR 也行）
+- Gradle 9.x（仓库已带 wrapper，不用本机装）
+- 网络能访问 Maven Central + JetBrains plugin 仓库
 
-## Predefined Run/Debug configurations
+### 依赖
 
-Within the default project structure, there is a `.run` directory provided containing predefined *Run/Debug configurations* that expose corresponding Gradle tasks:
+构建工具：IntelliJ Platform Gradle Plugin 2.x + Kotlin 2.x。IDE 平台依赖为 `IC-2024.3`，并引入 `bundledPlugin("com.intellij.java")` 以访问 PSI Java API。
 
-| Configuration name  | Description                                                                                                                                                                         |
-|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Run IDE with Plugin | Runs [`:runIde`][docs:intellij-platform-gradle-plugin-runIde] IntelliJ Platform Gradle Plugin task. Use the *Debug* icon for plugin debugging.                                        |
-| Run Tests           | Runs [`:check`][gradle:lifecycle-tasks] Gradle task.                                                                                                                                |
-| Run Verifications   | Runs [`:verifyPlugin`][docs:intellij-platform-gradle-plugin-verifyPlugin] IntelliJ Platform Gradle Plugin task to check the plugin compatibility against the specified IntelliJ IDEs. |
+### 常用 Gradle 任务
 
-> [!NOTE]
-> You can find the logs from the running task in the `idea.log` tab.
+```bash
+# 编译 Kotlin 源码（最快的 sanity check）
+./gradlew compileKotlin
 
-## Publishing the plugin
+# 只打 jar（跳过字节码 instrument / verifier / 签名，本地开发够用）
+./gradlew jar \
+  -x instrumentCode -x instrumentedJar -x verifyPlugin -x signPlugin
 
-> [!TIP]
-> Make sure to follow all guidelines listed in [Publishing a Plugin][docs:publishing] to follow all recommended and required steps.
+# 完整打包 zip（包含 instrumented 字节码；需要能访问 JetBrains artifact 仓库）
+./gradlew buildPlugin
 
-Releasing a plugin to [JetBrains Marketplace](https://plugins.jetbrains.com) is a straightforward operation that uses the `publishPlugin` Gradle task provided by the [intellij-platform-gradle-plugin][docs:intellij-platform-gradle-plugin-docs].
+# 在 sandbox IDE 里启动插件做测试
+./gradlew runIde
+```
 
-You can also upload the plugin to the [JetBrains Plugin Repository](https://plugins.jetbrains.com/plugin/upload) manually via UI.
+> 国内网络如果遇到拉 `java-compiler-ant-tasks` / `java-gui-forms-rt` 失败（TLS 握手错误），通常卡在 `instrumentCode` 任务。本地开发可以用 `./gradlew jar -x instrumentCode ...` 跳过，最终对外发布时再切到能联网的环境跑 `buildPlugin`。
 
-## Useful links
+---
 
-- [IntelliJ Platform SDK Plugin SDK][docs]
-- [IntelliJ Platform Gradle Plugin Documentation][docs:intellij-platform-gradle-plugin-docs]
-- [IntelliJ Platform Explorer][jb:ipe]
-- [JetBrains Marketplace Quality Guidelines][jb:quality-guidelines]
-- [IntelliJ Platform UI Guidelines][jb:ui-guidelines]
-- [JetBrains Marketplace Paid Plugins][jb:paid-plugins]
-- [IntelliJ SDK Code Samples][gh:code-samples]
+## 本地启动 IDE 测试（runIde）
 
-[docs]: https://plugins.jetbrains.com/docs/intellij
-[docs:plugin.xml]: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html?from=IJPluginReadmeFile
-[docs:publishing]: https://plugins.jetbrains.com/docs/intellij/publishing-plugin.html?from=IJPluginReadmeFile
-[docs:intellij-platform-gradle-plugin-docs]: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin.html?from=IJPluginReadmeFile
-[docs:intellij-platform-gradle-plugin-runIde]: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-tasks.html?from=IJPluginReadmeFile#runIde
-[docs:intellij-platform-gradle-plugin-verifyPlugin]: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-tasks.html?from=IJPluginReadmeFile#verifyPlugin
-[docs:logo]: https://plugins.jetbrains.com/docs/intellij/plugin-icon-file.html?from=IJPluginReadmeFile
-[docs:target-version]: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html?from=IJPluginReadmeFile#target-versions
-[docs:testing]: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html?from=IJPluginReadmeFile#testing
+`runIde` 会启动一个**独立的 sandbox IDE 实例**，里面已经装好了当前构建的插件。
 
-[file:build.gradle.kts]: ./build.gradle.kts
-[file:CHANGELOG.md]: ./CHANGELOG.md
-[file:gradle.properties]: ./gradle.properties
-[file:plugin.xml]: ./src/main/resources/META-INF/plugin.xml
+```bash
+./gradlew runIde
+```
 
-[gh:code-samples]: https://github.com/JetBrains/intellij-sdk-code-samples
+启动后：
 
-[gradle:lifecycle-tasks]: https://docs.gradle.org/current/userguide/java_plugin.html#lifecycle_tasks
+1. 在 sandbox IDE 里 `Open` 任意 Spring 项目（建议用真实业务项目验证 PSI 扫描）
+2. 打开任意 `@RestController` 的 Java 文件
+3. 方法上方应出现 `🔥 Prod: ...` 渲染
 
-[jb:github]: https://github.com/JetBrains/.github/blob/main/profile/README.md
-[jb:forum]: https://platform.jetbrains.com/
-[jb:quality-guidelines]: https://plugins.jetbrains.com/docs/marketplace/quality-guidelines.html
-[jb:paid-plugins]: https://plugins.jetbrains.com/docs/marketplace/paid-plugins-marketplace.html
-[jb:ipe]: https://jb.gg/ipe
-[jb:ui-guidelines]: https://jetbrains.github.io/ui
+### 看日志
+
+sandbox IDE 的日志在：
+
+```
+Help | Show Log in Files (或 Show Log in Explorer)
+```
+
+打开 `idea.log`，过滤 `[PCS]` 前缀可看到本插件的所有诊断日志，包括：
+
+- 启动时打印 Code Vision 引擎里注册的所有 provider
+- 每次扫描 Controller 时打印类名、注解、识别到的 handler sign
+- mock 模式 / HTTP 模式切换、缓存命中、刷新事件
+
+---
+
+## 打包并导入 IDEA
+
+### 步骤 1：生成 zip
+
+```bash
+./gradlew buildPlugin
+```
+
+产物在：
+
+```
+build/distributions/prod-call-stats-<version>.zip
+```
+
+> 如果只需要 jar（用于 dev 测试或自定义脚本），运行：
+> ```bash
+> ./gradlew jar -x instrumentCode -x instrumentedJar -x verifyPlugin -x signPlugin
+> ```
+> 产物：`build/libs/prod-call-stats-<version>-base.jar`
+
+### 步骤 2：导入到本机 IDEA
+
+1. 打开 IDEA → `Settings/Preferences` → `Plugins`
+2. 右上角齿轮 → `Install Plugin from Disk...`
+3. 选 `build/distributions/prod-call-stats-<version>.zip`
+4. `Restart IDE`
+
+### 步骤 3：验证
+
+- `Plugins` 列表里出现 `Prod Call Stats` 且为已启用
+- `Settings | Tools | Prod Call Stats` 配置页存在
+- 打开 Controller 文件能看到 `🔥 Prod: ...` Code Vision
+
+### 更新版本
+
+修改 `gradle.properties` 里的 `version` 后重新 `buildPlugin` 即可。
+
+> 注意：插件 ID `cc.miaooo.prod-call-stats` 一旦发布就不能改，只能升级 version。
+
+---
+
+## 项目结构
+
+```
+src/main/kotlin/cc/miaooo/prodcallstats/
+├── ProdCallStatsBundle.kt              # i18n bundle 包装
+├── bootstrap/
+│   └── ProdCallStatsStartupActivity.kt # 启动时打印注册状态 / 兜底启用 provider
+├── codevision/
+│   ├── SpringControllerStatsProvider.kt# CodeVisionProvider 实现，渲染主行
+│   ├── ScheduleFetcherTask.kt          # 批量拉取合流 + 完成后触发重渲染
+│   └── StatsRenderer.kt                # 文案格式化（主行 + tooltip）
+├── gateway/
+│   ├── GatewayClient.kt                # HTTP 客户端（单查 / 批量 / ping）+ mock 生成
+│   └── GatewayException.kt             # token 失效 / 404 / 网络不可达
+├── psi/
+│   ├── HandlerMethod.kt                # 数据模型（className + methodName + url + sign）
+│   ├── Mapping.kt                      # 单个 mapping 注解的解析结果
+│   └── SpringControllerScanner.kt      # 扫描 @RestController / @*Mapping
+├── settings/
+│   ├── StatsSettingsState.kt           # PersistentStateComponent 持久化
+│   ├── StatsSettingsConfigurable.kt    # Settings 面板入口
+│   └── StatsSettingsPanel.kt           # Swing UI
+├── stats/
+│   ├── CallStats.kt                    # 指标数据模型
+│   └── StatsCacheService.kt            # TTL + 后台批量调度
+└── util/
+    └── HumanizeUtil.kt                 # 数字格式化（12345 → 12.3K / 1.2M）
+
+src/main/resources/
+├── META-INF/
+│   ├── plugin.xml                      # 扩展点声明
+│   └── pluginIcon.svg                  # 插件图标
+└── messages/
+    └── ProdCallStatsBundle.properties  # i18n 文案
+```
+
+---
+
+## 故障排查
+
+### Code Vision 文字根本不出现
+
+依次确认：
+
+1. `Settings | Editor | Inlay Hints | Code Vision` → 顶部 `Enable code vision` 主开关已打开
+2. 该列表里有 `Prod Call Stats` 且已勾选
+3. `Settings | Tools | Prod Call Stats` 的 `Enable` 已勾选
+4. 打开的文件确实是 `@RestController`（或 `@Controller`）的 Java 类，且至少一个方法带 `@*Mapping`
+
+### 看日志判断问题
+
+`Help | Show Log in Files` → 搜 `[PCS]`，重点看：
+
+| 日志 | 含义 |
+|---|---|
+| `=== plugin loaded in project: X ===` | 插件已加载 |
+| `CodeVisionHost providers (N):` + 列表 | Code Vision 引擎实际注册了哪些 provider，应有 `prod-call-stats` |
+| `*** OUR PROVIDER IS NOT REGISTERED ***` | EP 没注册成功，检查 plugin.xml 是否完整部署 |
+| `found controller: X` | 扫描识别到 Controller |
+| `Spring class 'X' NOT on classpath` | 项目没引入 Spring 依赖，或索引未就绪 |
+| `fetch MOCK sign=X` / `fetchBatch HTTP count=N` | 当前是 mock 还是 HTTP 模式 |
+
+### 已知坑
+
+- **`@RestController` 的 FQN 是 `org.springframework.web.bind.annotation.RestController`**，不在 `stereotype` 包下。早期版本代码里写错过，导致识别失败。
+- **Code Vision EP 必须用 `codeInsight.codeVisionProvider`**（在 `defaultExtensionNs="com.intellij"` 下），写成 `<codeVisionProvider>` 会被静默忽略。
+- **`computeCodeVision` 在 pooled thread 执行**，PSI 访问必须包 `ReadAction.compute { ... }`。
+- **`TextCodeVisionEntry.text` 是纯文本**，不解析 HTML，颜色需要走 tooltip / longPresentation。
+- **`buildSearchableOptions` 任务**会在 headless IDE 退出时抛 H2 异常，已在 `build.gradle.kts` 里禁用，发布时可视情况打开。
+
+---
+
+## License
+
+内部使用，未声明开源 license。
