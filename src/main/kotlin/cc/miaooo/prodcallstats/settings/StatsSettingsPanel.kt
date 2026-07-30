@@ -26,6 +26,7 @@ class StatsSettingsPanel {
     private val envProd = JRadioButton("prod")
     private val envPre = JRadioButton("pre")
     private val gatewayUrlField = JBTextField()
+    private val apiVersionCombo = ComboBox(arrayOf("v1", "v2"))
     private val apiTokenField = JBPasswordField()
     private val refreshField = JBTextField()
     private val verboseCheckBox = JBCheckBox(ProdCallStatsBundle.message("settings.verbose"))
@@ -55,6 +56,13 @@ class StatsSettingsPanel {
     var gatewayUrl: String
         get() = gatewayUrlField.text
         set(v) { gatewayUrlField.text = v }
+
+    var apiVersion: String
+        get() = apiVersionCombo.selectedItem as? String ?: "v1"
+        set(v) {
+            // 兼容历史持久化值：未识别时回落到 v1
+            apiVersionCombo.selectedItem = if (v == "v2") "v2" else "v1"
+        }
 
     var apiToken: String
         get() = String(apiTokenField.password)
@@ -100,6 +108,7 @@ class StatsSettingsPanel {
         s.gatewayUrl = gatewayUrl.trim()
         s.apiToken = apiToken
         s.environment = environment
+        s.apiVersion = apiVersion
     }
 
     private fun buildLayout() {
@@ -109,6 +118,7 @@ class StatsSettingsPanel {
             .addLabeledComponent(JBLabel(ProdCallStatsBundle.message("settings.environment")),
                 JPanel().apply { add(envProd); add(envPre) })
             .addLabeledComponent(JBLabel(ProdCallStatsBundle.message("settings.gateway.url")), gatewayUrlField)
+            .addLabeledComponent(JBLabel(ProdCallStatsBundle.message("settings.api.version")), apiVersionCombo)
             .addLabeledComponent(JBLabel(ProdCallStatsBundle.message("settings.api.token")),
                 JPanel(GridBagLayout()).apply {
                     val c = GridBagConstraints().apply {
@@ -137,6 +147,7 @@ class StatsSettingsPanel {
         useMock = state.useMock
         environment = state.environment
         gatewayUrl = state.gatewayUrl
+        apiVersion = state.apiVersion
         apiToken = state.apiToken
         refreshIntervalSeconds = state.refreshIntervalSeconds
         verbose = state.verbose

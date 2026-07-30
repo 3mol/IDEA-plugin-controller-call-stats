@@ -33,6 +33,7 @@ class StatsSettingsConfigurable : Configurable {
             p.useMock != state.useMock ||
             p.environment != state.environment ||
             p.gatewayUrl != state.gatewayUrl ||
+            p.apiVersion != state.apiVersion ||
             p.apiToken != state.apiToken ||
             p.refreshIntervalSeconds != state.refreshIntervalSeconds ||
             p.verbose != state.verbose ||
@@ -49,12 +50,14 @@ class StatsSettingsConfigurable : Configurable {
         val sourceChanged = p.useMock != state.useMock ||
             p.environment != state.environment ||
             p.gatewayUrl.trim() != state.gatewayUrl ||
+            p.apiVersion != state.apiVersion ||
             p.apiToken != state.apiToken
 
         state.enabled = p.isEnabled
         state.useMock = p.useMock
         state.environment = p.environment
         state.gatewayUrl = p.gatewayUrl.trim()
+        state.apiVersion = p.apiVersion
         state.apiToken = p.apiToken
         state.refreshIntervalSeconds = p.refreshIntervalSeconds
         state.verbose = p.verbose

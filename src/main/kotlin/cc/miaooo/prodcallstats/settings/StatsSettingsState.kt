@@ -17,6 +17,12 @@ class StatsSettingsState : PersistentStateComponent<StatsSettingsState> {
     var environment: String = "prod"
     var gatewayUrl: String = ""
     var apiToken: String = ""
+    /**
+     * 网关接口协议版本。
+     * - "v1": GET /api/v1/call-stats + POST /api/v1/call-stats/batch，results 为 map
+     * - "v2": POST /api/v2/call-stats，results 为 array，每项含 className/methodName/sign 字段
+     */
+    var apiVersion: String = "v1"
     var refreshIntervalSeconds: Long = 60L
     var verbose: Boolean = false
     var p99WarnMillis: Long = 500L

@@ -56,12 +56,13 @@ object GatewayClient {
             log.warn("[PCS] fetchBatch MOCK count=${handlers.size}")
             return handlers.associate { it.sign to mockFor(it, now) }
         }
-        log.warn("[PCS] fetchBatch HTTP count=${handlers.size} env=${settings.environment}")
+        log.warn("[PCS] fetchBatch HTTP count=${handlers.size} env=${settings.environment} api=${settings.apiVersion}")
         return requestBatch(
             settings.gatewayUrl.trimEnd('/'),
             settings.apiToken,
             settings.environment,
             handlers,
+            settings.apiVersion,
         )
     }
 
@@ -116,8 +117,11 @@ object GatewayClient {
         token: String,
         env: String,
         handlers: List<HandlerMethod>,
+        apiVersion: String,
     ): Map<String, CallStats> {
-        val url = "$baseUrl/api/v1/call-stats/batch"
+        // v1: POST /api/v1/call-stats/batch，results 为 map
+        // v2: POST /api/v2/call-stats，results 为 array，每项含 className/methodName/sign
+        val url = if (apiVersion == "v2") "$baseUrl/api/v2/call-stats" else "$baseUrl/api/v1/call-stats/batch"
         val payload = JsonObject().apply {
             addProperty("env", env)
             add("signs", gson.toJsonTree(handlers.map { it.sign }))
@@ -157,9 +161,29 @@ object GatewayClient {
 
     private fun parseBatch(json: String): Map<String, CallStats> {
         val obj = JsonParser.parseString(json).asJsonObject
-        val results = obj.getAsJsonObject("results") ?: return emptyMap()
-        return results.entrySet().associate { (sign, value) ->
-            sign to parseStats(value.asJsonObject)
+        val results = obj.get("results") ?: return emptyMap()
+        // v1: results 是对象 {sign: stats}
+        // v2: results 是数组 [{className, methodName, sign, ...stats}]
+        return when {
+            results.isJsonObject -> {
+                results.asJsonObject.entrySet().associate { (sign, value) ->
+                    sign to parseStats(value.asJsonObject)
+                }
+            }
+            results.isJsonArray -> {
+                results.asJsonArray.mapNotNull { el ->
+                    val item = el.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
+                    // 优先用 sign 字段，缺失则用 className + "#" + methodName 组合
+                    val sign = item.get("sign")?.takeIf { !it.isJsonNull }?.asString
+                        ?: buildString {
+                            val cls = item.get("className")?.takeIf { !it.isJsonNull }?.asString
+                            val mtd = item.get("methodName")?.takeIf { !it.isJsonNull }?.asString
+                            if (cls != null && mtd != null) append("$cls#$mtd")
+                        }
+                    if (sign.isNullOrEmpty()) null else sign to parseStats(item)
+                }.toMap()
+            }
+            else -> emptyMap()
         }
     }
 
