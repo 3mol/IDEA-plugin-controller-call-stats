@@ -2,3 +2,7 @@
 /build/
 /.intellijPlatform/
 /.gradle/
+
+# Python
+__pycache__/
+*.pyc
