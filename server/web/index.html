@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Prod Call Stats</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #1f2329;
+    background: #f5f6f7;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  header {
+    padding: 16px 24px;
+    background: #fff;
+    border-bottom: 1px solid #e5e6eb;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  .filters { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .filters label { display: flex; flex-direction: column; font-size: 12px; color: #4e5969; gap: 4px; }
+  .filters input[type="text"] {
+    width: 360px;
+    padding: 6px 10px;
+    border: 1px solid #c9cdd4;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+  .filters input[type="text"]:focus { outline: none; border-color: #165dff; }
+  .filters button {
+    padding: 7px 16px;
+    background: #165dff;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    align-self: flex-end;
+  }
+  .filters button.secondary { background: #f2f3f5; color: #1f2329; }
+  .filters button:hover { opacity: 0.9; }
+  .meta { font-size: 12px; color: #86909c; }
+  main { padding: 16px 24px; flex: 1; min-height: 0; display: flex; }
+  .table-wrap {
+    background: #fff;
+    border: 1px solid #e5e6eb;
+    border-radius: 4px;
+    overflow: auto;
+    flex: 1;
+    min-height: 0;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { padding: 8px 12px; text-align: left; white-space: nowrap; }
+  thead th {
+    background: #f7f8fa;
+    border-bottom: 1px solid #e5e6eb;
+    color: #4e5969;
+    font-weight: 500;
+    cursor: pointer;
+    user-select: none;
+    position: sticky;
+    top: 0;
+  }
+  thead th .arrow { color: #165dff; margin-left: 4px; }
+  tbody tr { border-bottom: 1px solid #f2f3f5; }
+  tbody tr:hover { background: #f7faff; }
+  td.sign { font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; font-size: 12px; color: #4e5969; }
+  td.name { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .p99-warn { color: #d46b08; font-weight: 600; }
+  .p99-err { color: #cb2634; font-weight: 600; }
+  .empty { padding: 32px; text-align: center; color: #86909c; }
+  .error { padding: 16px; color: #cb2634; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Prod Call Stats</h1>
+  <form class="filters" id="filterForm">
+    <label>
+      sign（模糊匹配，className#methodName）
+      <input type="text" id="signInput" placeholder="例：WarehouseController#queryById 或 com.codo...">
+    </label>
+    <label>
+      apiNameValue（接口名称，模糊匹配）
+      <input type="text" id="apiInput" placeholder="例：调拨单">
+    </label>
+    <button type="submit">查询</button>
+    <button type="button" class="secondary" id="resetBtn">重置</button>
+    <span class="meta" id="meta"></span>
+  </form>
+</header>
+<main>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr id="theadRow"></tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="11" class="empty">加载中...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+// 列定义：key 对应后端返回字段，sort 是发给后端 /api/v2/stats 的 sort 参数。
+const COLUMNS = [
+  { key: "sign",         label: "sign",          sort: "sign",      cls: "sign" },
+  { key: "apiOperationValue", label: "API 名称", sort: "apiName",   cls: "name" },
+  { key: "today",        label: "今日",          sort: "today",     num: true },
+  { key: "week",         label: "7 日",          sort: "week",      num: true },
+  { key: "p99Millis",    label: "P99 ms",        sort: "p99",       num: true, p99: true },
+  { key: "minExecuteTimeRequired", label: "Min", sort: "min",       num: true },
+  { key: "avgExecuteTimeRequired", label: "Avg", sort: "avg",       num: true },
+  { key: "maxExecuteTimeRequired", label: "Max", sort: "max",       num: true },
+  { key: "errorRate",    label: "Err %",         sort: "errorRate", num: true },
+  { key: "fetchedAt",    label: "采集时间",       sort: "fetchedAt" },
+];
+
+const state = {
+  sign: "",
+  api: "",
+  sort: "p99",     // 默认按 p99 排序
+  dir: "desc",
+  limit: 500,
+};
+
+const $sign = document.getElementById("signInput");
+const $api = document.getElementById("apiInput");
+const $form = document.getElementById("filterForm");
+const $reset = document.getElementById("resetBtn");
+const $meta = document.getElementById("meta");
+const $thead = document.getElementById("theadRow");
+const $tbody = document.getElementById("tbody");
+
+function renderHead() {
+  $thead.innerHTML = "";
+  for (const col of COLUMNS) {
+    const th = document.createElement("th");
+    const arrow = state.sort === col.sort ? (state.dir === "asc" ? " ▲" : " ▼") : "";
+    th.innerHTML = `${col.label}<span class="arrow">${arrow}</span>`;
+    th.onclick = () => {
+      if (state.sort === col.sort) {
+        state.dir = state.dir === "asc" ? "desc" : "asc";
+      } else {
+        state.sort = col.sort;
+        // 数值列默认降序更直观
+        state.dir = "desc";
+      }
+      renderHead();
+      refresh();
+    };
+    $thead.appendChild(th);
+  }
+}
+
+function formatNumber(v) {
+  if (v === null || v === undefined || v === "" ) return "-";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "-";
+  return n.toLocaleString("en-US");
+}
+
+function formatMs(v) {
+  if (v === null || v === undefined || v === "") return "-";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "-";
+  return n.toFixed(n < 10 ? 2 : 1);
+}
+
+function formatErr(v) {
+  if (v === null || v === undefined || v === "") return "-";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "-";
+  return (n * 100).toFixed(3);
+}
+
+function formatTs(v) {
+  if (!v) return "-";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleString("zh-CN", { hour12: false });
+}
+
+function p99Class(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "";
+  if (n >= 2000) return "p99-err";
+  if (n >= 500) return "p99-warn";
+  return "";
+}
+
+function renderRows(rows) {
+  if (!rows || rows.length === 0) {
+    $tbody.innerHTML = `<tr><td colspan="${COLUMNS.length}" class="empty">无数据</td></tr>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    for (const col of COLUMNS) {
+      const td = document.createElement("td");
+      if (col.cls) td.className = col.cls;
+      if (col.num) td.className = (td.className ? td.className + " " : "") + "num";
+      let text;
+      if (col.key === "sign") {
+        text = r.sign || "";
+      } else if (col.key === "apiOperationValue") {
+        text = r.apiOperationValue || "(未配置)";
+      } else if (col.key === "today" || col.key === "week") {
+        text = formatNumber(r[col.key]);
+      } else if (col.key === "errorRate") {
+        text = formatErr(r[col.key]);
+      } else if (col.key === "fetchedAt") {
+        text = formatTs(r[col.key]);
+      } else {
+        text = formatMs(r[col.key]);
+        if (col.p99) {
+          const cls = p99Class(r[col.key]);
+          if (cls) td.classList.add(cls);
+        }
+      }
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    frag.appendChild(tr);
+  }
+  $tbody.innerHTML = "";
+  $tbody.appendChild(frag);
+}
+
+async function refresh() {
+  const params = new URLSearchParams({
+    sign: state.sign,
+    api: state.api,
+    sort: state.sort,
+    dir: state.dir,
+    limit: String(state.limit),
+  });
+  $tbody.innerHTML = `<tr><td colspan="${COLUMNS.length}" class="empty">加载中...</td></tr>`;
+  try {
+    const resp = await fetch(`/api/v2/stats?${params.toString()}`);
+    if (!resp.ok) {
+      const txt = await resp.text();
+      $tbody.innerHTML = `<tr><td colspan="${COLUMNS.length}" class="error">HTTP ${resp.status} ${txt}</td></tr>`;
+      return;
+    }
+    const data = await resp.json();
+    renderRows(data.results);
+    $meta.textContent = `共 ${data.count} 条 · sort=${data.query.sort} dir=${data.query.dir}`;
+  } catch (e) {
+    $tbody.innerHTML = `<tr><td colspan="${COLUMNS.length}" class="error">请求失败：${e}</td></tr>`;
+  }
+}
+
+$form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  state.sign = $sign.value.trim();
+  state.api = $api.value.trim();
+  refresh();
+});
+
+$reset.addEventListener("click", () => {
+  $sign.value = "";
+  $api.value = "";
+  state.sign = "";
+  state.api = "";
+  state.sort = "p99";
+  state.dir = "desc";
+  renderHead();
+  refresh();
+});
+
+// 初始：从 URL 读 sign/api 参数（便于深链）
+const initParams = new URLSearchParams(location.search);
+if (initParams.get("sign")) { state.sign = initParams.get("sign"); $sign.value = state.sign; }
+if (initParams.get("api"))  { state.api  = initParams.get("api");  $api.value  = state.api;  }
+
+renderHead();
+refresh();
+</script>
+</body>
+</html>
