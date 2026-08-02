@@ -81,7 +81,7 @@ class StatsSettingsPanel {
         set(v) { p99WarnField.text = v.toString() }
 
     var p99ErrorMillis: Long
-        get() = p99ErrorField.text.toLongOrNull() ?: 2000L
+        get() = p99ErrorField.text.toLongOrNull() ?: 5000L
         set(v) { p99ErrorField.text = v.toString() }
 
     var errorRateWarnPercent: Double

@@ -77,6 +77,7 @@ object SpringControllerScanner {
             methodName = method.name,
             httpMethod = mapping.httpMethod,
             urlTemplate = joinPaths(classMapping?.paths, mapping.paths),
+            description = readApiDescription(method),
         )
     }
 
@@ -145,6 +146,26 @@ object SpringControllerScanner {
         val valueAttr = ann.findAttributeValue("value")
         val raw = pathAttr ?: valueAttr
         return stringListFrom(raw).nullize() ?: emptyList()
+    }
+
+    /**
+     * Reads the human-readable description for a handler method. Prefers
+     * Swagger 2 `@ApiOperation(value)`, falls back to OpenAPI 3
+     * `@Operation(summary)`. Returns null if neither is present or the
+     * resolved value is blank.
+     */
+    private fun readApiDescription(method: PsiMethod): String? {
+        val list = method.modifierList ?: return null
+        val candidates = listOf(
+            "io.swagger.annotations.ApiOperation" to "value",
+            "io.swagger.v3.oas.annotations.Operation" to "summary",
+        )
+        for ((fqn, attr) in candidates) {
+            val ann = list.findAnnotation(fqn) ?: continue
+            val v = stringListFrom(ann.findAttributeValue(attr)).firstOrNull() ?: continue
+            if (v.isNotBlank()) return v.trim()
+        }
+        return null
     }
 
     private fun readRequestMethodAttribute(ann: PsiAnnotation): String? {
