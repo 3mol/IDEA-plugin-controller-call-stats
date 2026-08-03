@@ -81,7 +81,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
-        print(f"[resp] {self.command} {self.path} -> status={status} body={data.decode('utf-8')}")
+        print(f"[resp] {self.command} {self.path} -> status={status}")
 
     def _check_token(self) -> bool:
         expected = self.server.token  # type: ignore[attr-defined]

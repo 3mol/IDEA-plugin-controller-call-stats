@@ -74,10 +74,9 @@ class Handler(BaseHTTPRequestHandler):
             env = (q.get("env") or [""])[0]
             index = build_index(self.data_source.load())
             entry = index.get(sign)
-            hit = entry is not None
             # 未命中不补零（保持 v1 单查语义清晰），如需补零可改为 empty_stats_for(sign)
             stats = _stats_only(entry) if entry else _stats_only(empty_stats_for(sign))
-            print(f"[GET v1] sign={sign!r} env={env!r} hit={hit}")
+            print(f"[GET v1] sign={sign!r} env={env!r}")
             self._send_json(200, stats)
             return
 
