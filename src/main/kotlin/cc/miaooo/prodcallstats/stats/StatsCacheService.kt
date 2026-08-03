@@ -74,6 +74,10 @@ class StatsCacheService {
      * Triggers a batch fetch for the given handlers. Already-fresh entries are
      * skipped. Returns immediately after scheduling; callers re-read via
      * [getNow] once Code Vision re-renders.
+     *
+     * On completion a [StatsUpdateListener] event is published on the
+     * application message bus with the signs whose cache entry changed, so
+     * tooling (e.g. the class stats tool window) can repaint without polling.
      */
     fun fetchBatch(handlers: List<HandlerMethod>) {
         if (handlers.isEmpty()) return
@@ -91,21 +95,31 @@ class StatsCacheService {
         val placeholder = CompletableFuture<CallStats?>()
         toFetch.forEach { h -> cache[h.sign] = Entry(null, null, now, placeholder) }
         executor.execute {
-            try {
+            val updatedSigns: List<String> = try {
                 val results = GatewayClient.fetchBatch(toFetch)
                 log.warn("[PCS] fetchBatch got ${results.size} results")
                 results.forEach { (sign, stats) ->
                     cache[sign] = Entry(stats, null, System.currentTimeMillis(), null)
                 }
-                placeholder.complete(null)
+                results.keys.toList()
             } catch (e: GatewayException) {
                 log.warn("[PCS] fetchBatch failed: ${e.javaClass.simpleName}: ${e.message}")
                 toFetch.forEach { h ->
                     cache[h.sign] = Entry(null, e, System.currentTimeMillis(), null)
                 }
-                placeholder.complete(null)
+                toFetch.map { it.sign }
             }
+            placeholder.complete(null)
+            publishUpdate(updatedSigns)
         }
+    }
+
+    private fun publishUpdate(signs: List<String>) {
+        if (signs.isEmpty()) return
+        ApplicationManager.getApplication()
+            .messageBus
+            .syncPublisher(StatsUpdateListener.TOPIC)
+            .onStatsUpdated(signs)
     }
 
     fun invalidateAll() {

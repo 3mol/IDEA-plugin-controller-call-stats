@@ -26,9 +26,9 @@ class StatsSettingsState : PersistentStateComponent<StatsSettingsState> {
     var refreshIntervalSeconds: Long = 60L
     var verbose: Boolean = false
     var p99WarnMillis: Long = 500L
-    var p99ErrorMillis: Long = 2000L
-    var errorRateWarnPercent: Double = 0.1
-    var errorRateErrorPercent: Double = 1.0
+    var p99ErrorMillis: Long = 5000L
+    var errorRateWarnPercent: Double = 0.01
+    var errorRateErrorPercent: Double = 0.1
 
     override fun getState(): StatsSettingsState = this
 

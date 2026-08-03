@@ -49,5 +49,13 @@
         <!-- Logs Code Vision registration state on project open -->
         <postStartupActivity
             implementation="cc.miaooo.prodcallstats.bootstrap.ProdCallStatsStartupActivity"/>
+
+        <!-- Bottom tool window: full per-handler stats for the active controller -->
+        <toolWindow
+            id="Prod Stats"
+            anchor="bottom"
+            factoryClass="cc.miaooo.prodcallstats.ui.ClassStatsToolWindowFactory"
+            icon="AllIcons.Actions.Show"
+            secondary="true"/>
     </extensions>
 </idea-plugin>
