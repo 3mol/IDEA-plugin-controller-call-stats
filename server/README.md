@@ -17,6 +17,9 @@ cd server
 # MySQL（默认）
 DATA_SOURCE=mysql MYSQL_PASSWORD=123456 PORT=8089 python3 server.py
 
+# 指定参数
+DATA_SOURCE=mysql MYSQL_PASSWORD=root123 PORT=8089 MYSQL_HOST=192.168.22.167 MYSQL_PORT=30306  python3 server.py 
+
 # CSV（向后兼容）
 DATA_SOURCE=csv \
 CSV_PATH="/home/huyujing/IdeaProjects/duckle-demo-v2/output/接口调用次数分析.csv" \
