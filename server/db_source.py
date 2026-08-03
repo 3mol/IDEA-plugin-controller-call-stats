@@ -8,6 +8,9 @@ api_name 字段：
   className, methodName, sign, apiOperationValue
 
 两表通过 sign 关联；LEFT JOIN 保证未配置中文名的接口也能被检索到。
+注意：api_name 中同一 sign 可能存在多行（历史配置残留 / 多版本接口共用 sign），
+直接 JOIN 会让 prod_call_stat 一行被复制成多行。因此在子查询里按 sign 分组、
+取 MAX(apiOperationValue)，保证每个 sign 至多一条，避免结果集重复。
 
 连接参数通过环境变量配置（见 from_env），实现使用线程局部连接，
 遇到断连自动重连重试一次。
@@ -108,7 +111,11 @@ class DbSource(DataSource):
                       p.avgExecuteTimeRequired, p.errorRate, p.fetchedAt,
                       a.apiOperationValue
                FROM prod_call_stat p
-               LEFT JOIN api_name a ON a.sign = p.sign
+               LEFT JOIN (
+                   SELECT sign, MAX(apiOperationValue) AS apiOperationValue
+                   FROM api_name
+                   GROUP BY sign
+               ) a ON a.sign = p.sign
                WHERE p.sign = %s
                LIMIT 1""",
             (sign,),
@@ -126,7 +133,11 @@ class DbSource(DataSource):
                        p.avgExecuteTimeRequired, p.errorRate, p.fetchedAt,
                        a.apiOperationValue
                 FROM prod_call_stat p
-                LEFT JOIN api_name a ON a.sign = p.sign
+                LEFT JOIN (
+                    SELECT sign, MAX(apiOperationValue) AS apiOperationValue
+                    FROM api_name
+                    GROUP BY sign
+                ) a ON a.sign = p.sign
                 WHERE p.sign IN ({placeholders})""",
             tuple(signs),
         )
@@ -165,7 +176,11 @@ class DbSource(DataSource):
                          p.avgExecuteTimeRequired, p.errorRate, p.fetchedAt,
                          a.apiOperationValue
                   FROM prod_call_stat p
-                  LEFT JOIN api_name a ON a.sign = p.sign
+                  LEFT JOIN (
+                      SELECT sign, MAX(apiOperationValue) AS apiOperationValue
+                      FROM api_name
+                      GROUP BY sign
+                  ) a ON a.sign = p.sign
                   {where_sql}
                   ORDER BY {sort_col} {direction}
                   LIMIT %s OFFSET %s"""
