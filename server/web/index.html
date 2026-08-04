@@ -34,6 +34,66 @@
     font-size: 13px;
   }
   .filters input[type="text"]:focus { outline: none; border-color: #165dff; }
+  /* service 多选下拉 */
+  .service-picker { position: relative; }
+  .service-picker .picker-toggle {
+    min-width: 220px;
+    padding: 6px 10px;
+    border: 1px solid #c9cdd4;
+    border-radius: 4px;
+    font-size: 13px;
+    background: #fff;
+    cursor: pointer;
+    color: #1f2329;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .service-picker .picker-toggle:focus { outline: none; border-color: #165dff; }
+  .service-picker .picker-panel {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    background: #fff;
+    border: 1px solid #c9cdd4;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    max-height: 280px;
+    overflow-y: auto;
+    min-width: 260px;
+    z-index: 20;
+    padding: 6px 0;
+  }
+  .service-picker .picker-panel .picker-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .service-picker .picker-panel .picker-row:hover { background: #f7faff; }
+  .service-picker .picker-panel .picker-row input { cursor: pointer; }
+  .service-picker .picker-panel .picker-toolbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 12px 6px;
+    border-bottom: 1px solid #f2f3f5;
+    margin-bottom: 4px;
+  }
+  .service-picker .picker-panel .picker-toolbar button {
+    background: transparent;
+    border: none;
+    color: #165dff;
+    font-size: 12px;
+    padding: 0;
+    cursor: pointer;
+  }
   .filters button {
     padding: 7px 16px;
     background: #165dff;
@@ -71,8 +131,20 @@
   thead th .arrow { color: #165dff; margin-left: 4px; }
   tbody tr { border-bottom: 1px solid #f2f3f5; }
   tbody tr:hover { background: #f7faff; }
-  td.sign { font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; font-size: 12px; color: #4e5969; }
-  td.name { max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+  td.multi-cell { min-width: 320px; max-width: 520px; vertical-align: top; }
+  td.multi-cell > div {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.5;
+  }
+  td.multi-cell .row-sign {
+    font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: #4e5969;
+  }
+  td.multi-cell .row-service { font-size: 12px; color: #86909c; }
+  td.multi-cell .row-api { font-size: 13px; color: #1f2329; font-weight: 500; }
   .num { text-align: right; font-variant-numeric: tabular-nums; }
   .p99-warn { color: #d46b08; font-weight: 600; }
   .p99-err { color: #cb2634; font-weight: 600; }
@@ -91,6 +163,11 @@
     <label>
       apiNameValue（接口名称，模糊匹配）
       <input type="text" id="apiInput" placeholder="例：调拨单">
+    </label>
+    <label class="service-picker" id="servicePicker">
+      service（多选，默认全部）
+      <button type="button" class="picker-toggle" id="serviceToggle">加载中…</button>
+      <div class="picker-panel" id="servicePanel" hidden></div>
     </label>
     <button type="submit">查询</button>
     <button type="button" class="secondary" id="resetBtn">重置</button>
@@ -113,8 +190,8 @@
 <script>
 // 列定义：key 对应后端返回字段，sort 是发给后端 /api/v2/stats 的 sort 参数。
 const COLUMNS = [
-  { key: "sign",         label: "sign",          sort: "sign",      cls: "sign" },
-  { key: "apiOperationValue", label: "API 名称", sort: "apiName",   cls: "name" },
+  // sign / service / API 名称合并为一格，三行展示；点表头按 sign 排序
+  { key: "sign", label: "sign / service / 名称", sort: "sign", cls: "multi-cell" },
   { key: "today",        label: "今日",          sort: "today",     num: true },
   { key: "week",         label: "7 日",          sort: "week",      num: true },
   { key: "p99Millis",    label: "P99 ms",        sort: "p99",       num: true, p99: true },
@@ -128,6 +205,8 @@ const COLUMNS = [
 const state = {
   sign: "",
   api: "",
+  services: [],   // 选中的 service 列表；空数组表示不过滤
+  allServices: [], // 后端返回的全集，用于"全选/反选"和默认勾选
   sort: "p99",     // 默认按 p99 排序
   dir: "desc",
   limit: 500,
@@ -140,24 +219,28 @@ const $reset = document.getElementById("resetBtn");
 const $meta = document.getElementById("meta");
 const $thead = document.getElementById("theadRow");
 const $tbody = document.getElementById("tbody");
+const $serviceToggle = document.getElementById("serviceToggle");
+const $servicePanel = document.getElementById("servicePanel");
 
 function renderHead() {
   $thead.innerHTML = "";
   for (const col of COLUMNS) {
     const th = document.createElement("th");
-    const arrow = state.sort === col.sort ? (state.dir === "asc" ? " ▲" : " ▼") : "";
+    const arrow = col.sort && state.sort === col.sort ? (state.dir === "asc" ? " ▲" : " ▼") : "";
     th.innerHTML = `${col.label}<span class="arrow">${arrow}</span>`;
-    th.onclick = () => {
-      if (state.sort === col.sort) {
-        state.dir = state.dir === "asc" ? "desc" : "asc";
-      } else {
-        state.sort = col.sort;
-        // 数值列默认降序更直观
-        state.dir = "desc";
-      }
-      renderHead();
-      refresh();
-    };
+    if (col.sort) {
+      th.onclick = () => {
+        if (state.sort === col.sort) {
+          state.dir = state.dir === "asc" ? "desc" : "asc";
+        } else {
+          state.sort = col.sort;
+          // 数值列默认降序更直观
+          state.dir = "desc";
+        }
+        renderHead();
+        refresh();
+      };
+    }
     $thead.appendChild(th);
   }
 }
@@ -212,9 +295,21 @@ function renderRows(rows) {
       if (col.num) td.className = (td.className ? td.className + " " : "") + "num";
       let text;
       if (col.key === "sign") {
-        text = r.sign || "";
-      } else if (col.key === "apiOperationValue") {
-        text = r.apiOperationValue || "(未配置)";
+        // 合并单元格：sign / service / API 名称 三行
+        const $sign = document.createElement("div");
+        $sign.className = "row-sign";
+        $sign.textContent = r.sign || "";
+        const $svc = document.createElement("div");
+        $svc.className = "row-service";
+        $svc.textContent = r.service || "-";
+        const $api = document.createElement("div");
+        $api.className = "row-api";
+        $api.textContent = r.apiOperationValue || "(未配置)";
+        td.appendChild($sign);
+        td.appendChild($svc);
+        td.appendChild($api);
+        tr.appendChild(td);
+        continue;
       } else if (col.key === "today" || col.key === "week") {
         text = formatNumber(r[col.key]);
       } else if (col.key === "errorRate") {
@@ -245,6 +340,9 @@ async function refresh() {
     dir: state.dir,
     limit: String(state.limit),
   });
+  if (state.services.length > 0) {
+    params.set("service", state.services.join(","));
+  }
   $tbody.innerHTML = `<tr><td colspan="${COLUMNS.length}" class="empty">加载中...</td></tr>`;
   try {
     const resp = await fetch(`/api/v2/stats?${params.toString()}`);
@@ -255,11 +353,97 @@ async function refresh() {
     }
     const data = await resp.json();
     renderRows(data.results);
-    $meta.textContent = `共 ${data.count} 条 · sort=${data.query.sort} dir=${data.query.dir}`;
+    const svcInfo = state.services.length === 0 ? "全部 service" : `service=${state.services.length} 项`;
+    $meta.textContent = `共 ${data.count} 条 · ${svcInfo} · sort=${data.query.sort} dir=${data.query.dir}`;
   } catch (e) {
     $tbody.innerHTML = `<tr><td colspan="${COLUMNS.length}" class="error">请求失败：${e}</td></tr>`;
   }
 }
+
+// ---------- service 多选 ----------
+function renderServiceToggle() {
+  if (state.services.length === 0) {
+    $serviceToggle.textContent = "全部 service";
+  } else if (state.services.length === state.allServices.length) {
+    $serviceToggle.textContent = `全部 service（${state.allServices.length}）`;
+  } else {
+    $serviceToggle.textContent = `已选 ${state.services.length}/${state.allServices.length}`;
+  }
+}
+
+function renderServicePanel() {
+  if (state.allServices.length === 0) {
+    $servicePanel.innerHTML = `<div class="picker-row" style="color:#86909c">暂无 service</div>`;
+    return;
+  }
+  const allChecked = state.services.length === state.allServices.length;
+  const parts = [
+    `<div class="picker-toolbar">`,
+    `<button type="button" id="svcAll">${allChecked ? "取消全选" : "全选"}</button>`,
+    `<button type="button" id="svcInvert">反选</button>`,
+    `</div>`,
+  ];
+  for (const s of state.allServices) {
+    const checked = state.services.includes(s) ? "checked" : "";
+    parts.push(
+      `<label class="picker-row"><input type="checkbox" value="${encodeURIComponent(s)}" ${checked}><span>${escapeHtml(s)}</span></label>`
+    );
+  }
+  $servicePanel.innerHTML = parts.join("");
+  $servicePanel.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener("change", () => {
+      const v = decodeURIComponent(cb.value);
+      if (cb.checked && !state.services.includes(v)) state.services.push(v);
+      if (!cb.checked) state.services = state.services.filter(x => x !== v);
+      renderServiceToggle();
+    });
+  });
+  document.getElementById("svcAll").onclick = () => {
+    state.services = allChecked ? [] : [...state.allServices];
+    renderServiceToggle();
+    renderServicePanel();
+  };
+  document.getElementById("svcInvert").onclick = () => {
+    state.services = state.allServices.filter(s => !state.services.includes(s));
+    renderServiceToggle();
+    renderServicePanel();
+  };
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[ch]));
+}
+
+async function loadServices() {
+  try {
+    const resp = await fetch("/api/v2/services");
+    if (!resp.ok) {
+      $serviceToggle.textContent = "service 不可用";
+      return;
+    }
+    const data = await resp.json();
+    state.allServices = Array.isArray(data.results) ? data.results : [];
+    state.services = []; // 默认不勾选 = 不过滤 = 返回全部 service
+    renderServiceToggle();
+    renderServicePanel();
+  } catch (e) {
+    $serviceToggle.textContent = "service 加载失败";
+  }
+}
+
+$serviceToggle.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const willOpen = $servicePanel.hidden;
+  $servicePanel.hidden = !willOpen;
+});
+document.addEventListener("click", (e) => {
+  if ($servicePanel.hidden) return;
+  if (e.target === $serviceToggle) return;
+  if ($servicePanel.contains(e.target)) return;
+  $servicePanel.hidden = true;
+});
 
 $form.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -273,19 +457,34 @@ $reset.addEventListener("click", () => {
   $api.value = "";
   state.sign = "";
   state.api = "";
+  state.services = []; // 重置为默认不过滤
+  renderServiceToggle();
+  renderServicePanel();
   state.sort = "p99";
   state.dir = "desc";
   renderHead();
   refresh();
 });
 
-// 初始：从 URL 读 sign/api 参数（便于深链）
+// 初始：从 URL 读 sign/api/service 参数（便于深链）
 const initParams = new URLSearchParams(location.search);
 if (initParams.get("sign")) { state.sign = initParams.get("sign"); $sign.value = state.sign; }
 if (initParams.get("api"))  { state.api  = initParams.get("api");  $api.value  = state.api;  }
+const initServicesParam = initParams.get("service");
+const initServices = initServicesParam ? initServicesParam.split(",").map(s => s.trim()).filter(Boolean) : null;
 
 renderHead();
-refresh();
+(async () => {
+  await loadServices();
+  if (initServices) {
+    // 用 URL 指定的 service 覆盖默认全选（只保留实际存在的）
+    const set = new Set(initServices);
+    state.services = state.allServices.filter(s => set.has(s));
+    renderServiceToggle();
+    renderServicePanel();
+  }
+  refresh();
+})();
 </script>
 </body>
 </html>

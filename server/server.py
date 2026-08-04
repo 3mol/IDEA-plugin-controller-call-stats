@@ -126,6 +126,13 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_v2_stats(qs)
             return
 
+        if path == "/api/v2/services":
+            if not self._check_token():
+                self._send(401, {"error": "invalid token"})
+                return
+            self._handle_v2_services()
+            return
+
         self._send(404, {"error": f"unknown path {path}"})
 
     def _handle_v2_stats(self, qs: dict) -> None:
@@ -134,6 +141,7 @@ class Handler(BaseHTTPRequestHandler):
         参数：
           sign   按 p.sign 模糊匹配（LIKE %kw%）
           api    按 a.apiOperationValue 模糊匹配
+          service 按 p.service 精确匹配，多个用逗号分隔（service=a,b → IN (a,b)）
           sort   排序字段（p99 | today | week | errorRate | fetchedAt | ...，见 db_source._SORT_COLUMNS）
           dir    asc | desc，默认 desc
           limit  默认 200，最大 1000
@@ -141,6 +149,9 @@ class Handler(BaseHTTPRequestHandler):
         """
         sign_kw = (qs.get("sign") or [""])[0].strip()
         api_kw = (qs.get("api") or [""])[0].strip()
+        # service 多选：前端以逗号分隔传入；空串视为不过滤
+        service_raw = (qs.get("service") or [""])[0]
+        services = [s.strip() for s in service_raw.split(",") if s.strip()]
         sort = (qs.get("sort") or ["p99"])[0].strip() or "p99"
         direction = (qs.get("dir") or ["desc"])[0].strip().lower() or "desc"
         try:
@@ -159,6 +170,7 @@ class Handler(BaseHTTPRequestHandler):
         rows = search_fn(
             sign_kw=sign_kw,
             api_kw=api_kw,
+            services=services,
             sort=sort,
             direction=direction,
             limit=limit,
@@ -167,9 +179,19 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, {
             "results": rows,
             "count": len(rows),
-            "query": {"sign": sign_kw, "api": api_kw, "sort": sort, "dir": direction,
+            "query": {"sign": sign_kw, "api": api_kw, "services": services,
+                      "sort": sort, "dir": direction,
                       "limit": limit, "offset": offset},
         })
+
+    def _handle_v2_services(self) -> None:
+        """GET /api/v2/services：返回 prod_call_stat 所有 service 取值（已去重排序，1h 缓存）。"""
+        list_fn = getattr(self._source, "list_services", None)
+        if list_fn is None:
+            self._send(501, {"error": "services endpoint requires DATA_SOURCE=mysql"})
+            return
+        services = list_fn()
+        self._send(200, {"results": services, "count": len(services)})
 
     def _serve_index_html(self) -> None:
         index_path = os.path.join(WEB_DIR, "index.html")

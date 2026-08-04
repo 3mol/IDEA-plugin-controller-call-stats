@@ -18,6 +18,7 @@ api_name 字段：
 
 import os
 import threading
+import time
 
 import pymysql
 
@@ -40,6 +41,10 @@ _SORT_COLUMNS = {
 
 _DEFAULT_SORT = "p99"
 
+# service 列表的内存缓存有效期：prod_call_stat 的 service 取值变化不频繁，
+# 1h 内复用同一份结果即可，避免每次打开页面都打一遍 DISTINCT。
+_SERVICES_CACHE_TTL = 3600
+
 
 class DbSource(DataSource):
     def __init__(
@@ -61,6 +66,9 @@ class DbSource(DataSource):
             autocommit=True,
         )
         self._tls = threading.local()
+        self._services_lock = threading.Lock()
+        self._services_cache: list[str] | None = None
+        self._services_cache_ts: float = 0.0
 
     @classmethod
     def from_env(cls) -> "DbSource":
@@ -105,7 +113,7 @@ class DbSource(DataSource):
     # ---------- DataSource 接口 ----------
     def get(self, sign: str) -> dict | None:
         rows = self._query(
-            """SELECT p.className, p.methodName, p.sign,
+            """SELECT p.className, p.methodName, p.sign, p.service,
                       p.today, p.week, p.p99Millis,
                       p.maxExecuteTimeRequired, p.minExecuteTimeRequired,
                       p.avgExecuteTimeRequired, p.errorRate, p.fetchedAt,
@@ -127,7 +135,7 @@ class DbSource(DataSource):
             return [], []
         placeholders = ",".join(["%s"] * len(signs))
         rows = self._query(
-            f"""SELECT p.className, p.methodName, p.sign,
+            f"""SELECT p.className, p.methodName, p.sign, p.service,
                        p.today, p.week, p.p99Millis,
                        p.maxExecuteTimeRequired, p.minExecuteTimeRequired,
                        p.avgExecuteTimeRequired, p.errorRate, p.fetchedAt,
@@ -148,10 +156,35 @@ class DbSource(DataSource):
         return hits, missed
 
     # ---------- web 列表查询 ----------
+    def list_services(self) -> list[str]:
+        """返回 prod_call_stat 里所有非空 service，按字母序升序。
+
+        结果在 `_SERVICES_CACHE_TTL` 内复用内存缓存；并发场景下最多
+        多查一次 DB，不会出错。
+        """
+        now = time.monotonic()
+        with self._services_lock:
+            if self._services_cache is not None and (now - self._services_cache_ts) < _SERVICES_CACHE_TTL:
+                return self._services_cache
+
+        rows = self._query(
+            """SELECT DISTINCT service FROM prod_call_stat
+               WHERE service IS NOT NULL AND service <> ''
+               ORDER BY service""",
+            (),
+        )
+        services = [r["service"] for r in rows]
+
+        with self._services_lock:
+            self._services_cache = services
+            self._services_cache_ts = time.monotonic()
+        return services
+
     def search(
         self,
         sign_kw: str = "",
         api_kw: str = "",
+        services: list[str] | None = None,
         sort: str = _DEFAULT_SORT,
         direction: str = "desc",
         limit: int = 200,
@@ -168,9 +201,13 @@ class DbSource(DataSource):
         if api_kw:
             where_parts.append("a.apiOperationValue LIKE %s")
             args.append(f"%{api_kw}%")
+        if services:
+            placeholders = ",".join(["%s"] * len(services))
+            where_parts.append(f"p.service IN ({placeholders})")
+            args.extend(services)
         where_sql = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
-        sql = f"""SELECT p.className, p.methodName, p.sign,
+        sql = f"""SELECT p.className, p.methodName, p.sign, p.service,
                          p.today, p.week, p.p99Millis,
                          p.maxExecuteTimeRequired, p.minExecuteTimeRequired,
                          p.avgExecuteTimeRequired, p.errorRate, p.fetchedAt,
