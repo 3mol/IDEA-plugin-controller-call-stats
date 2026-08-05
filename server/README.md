@@ -38,6 +38,77 @@ PORT=8089 python3 server.py
 | `PORT` | `8089` | 监听端口 |
 | `TOKEN` | （空） | 非空时强制校验 `X-Api-Token` 请求头 |
 
+## Docker 化部署
+
+仓库根目录的 `server/Dockerfile` 已封装好运行环境，基于 `python:3.11-slim`，仅安装 MySQL 模式所需的 `pymysql`，入口为 `python server.py`，默认暴露 `8089` 端口。
+
+### 构建镜像
+
+```bash
+cd server
+docker build -t prod-call-stats:latest .
+```
+
+构建上下文即为 `server/` 目录，`.dockerignore` 已忽略 `__pycache__/`、`.git/`、`.python-version` 等无关文件。
+
+### 运行容器
+
+```bash
+# MySQL 模式（默认）
+docker run -d --name prod-call-stats \
+  -p 8089:8089 \
+  -e DATA_SOURCE=mysql \
+  -e MYSQL_HOST=192.168.22.167 \
+  -e MYSQL_PORT=30306 \
+  -e MYSQL_USER=root \
+  -e MYSQL_PASSWORD=root123 \
+  -e MYSQL_DB=dev \
+  --restart unless-stopped \
+  prod-call-stats:latest
+
+# CSV 模式：把 CSV 文件挂载进容器，并通过 CSV_PATH 指向容器内路径
+docker run -d --name prod-call-stats \
+  -p 8089:8089 \
+  -e DATA_SOURCE=csv \
+  -e CSV_PATH=/data/接口调用次数分析.csv \
+  -v /home/huyujing/IdeaProjects/duckle-demo-v2/output:/data:ro \
+  prod-call-stats:latest
+
+# 启用 Token 校验
+docker run -d --name prod-call-stats \
+  -p 8089:8089 \
+  -e DATA_SOURCE=mysql \
+  -e MYSQL_HOST=192.168.22.167 \
+  -e MYSQL_PORT=30306 \
+  -e MYSQL_USER=root \
+  -e MYSQL_PASSWORD=root123 \
+  -e TOKEN=your-token-here \
+  prod-call-stats:latest
+```
+
+### 常用运维命令
+
+```bash
+# 查看实时日志
+docker logs -f prod-call-stats
+
+# 重启
+docker restart prod-call-stats
+
+# 升级镜像：重新构建后替换容器
+docker rm -f prod-call-stats && docker run -d ... prod-call-stats:latest
+
+# 进入容器排查
+docker exec -it prod-call-stats sh
+```
+
+### 注意事项
+
+- 容器内监听端口固定为 `PORT=8089`，宿主机映射端口可任意（如 `-p 9090:8089`）
+- MySQL 模式需保证容器能访问到 `MYSQL_HOST`，跨主机时确认网络/防火墙放通
+- CSV 模式必须通过 `-v` 挂载数据文件，容器内不存在宿主机的原始路径
+- 时区如需与业务一致，可加 `-e TZ=Asia/Shanghai` 或挂载 `/etc/localtime`
+
 ## 数据库表结构
 
 两张表通过 `sign` LEFT JOIN，未配置中文名的接口仍可被检索到。
