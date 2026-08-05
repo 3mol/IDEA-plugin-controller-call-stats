@@ -42,11 +42,25 @@ PORT=8089 python3 server.py
 
 仓库根目录的 `server/Dockerfile` 已封装好运行环境，基于 `python:3.11-slim`，仅安装 MySQL 模式所需的 `pymysql`，入口为 `python server.py`，默认暴露 `8089` 端口。
 
+镜像已发布到阿里云容器镜像服务（ACR），命名空间 `codotech`：
+
+| 场景 | 镜像地址 |
+|---|---|
+| 公网拉取 / 本地 | `codo-cr-registry.cn-shenzhen.cr.aliyuncs.com/codotech/prod-call-stats:latest` |
+| VPC 内拉取（推荐，更快、免公网带宽） | `codo-cr-registry-vpc.cn-shenzhen.cr.aliyuncs.com/codotech/prod-call-stats:latest` |
+
 ### 构建镜像
 
 ```bash
 cd server
+
+# 本地构建
 docker build -t prod-call-stats:latest .
+
+# 打 tag 推送到阿里云 ACR（codotech 命名空间）
+docker tag prod-call-stats:latest codo-cr-registry.cn-shenzhen.cr.aliyuncs.com/codotech/prod-call-stats:latest
+docker login codo-cr-registry.cn-shenzhen.cr.aliyuncs.com
+docker push codo-cr-registry.cn-shenzhen.cr.aliyuncs.com/codotech/prod-call-stats:latest
 ```
 
 构建上下文即为 `server/` 目录，`.dockerignore` 已忽略 `__pycache__/`、`.git/`、`.python-version` 等无关文件。
@@ -54,7 +68,7 @@ docker build -t prod-call-stats:latest .
 ### 运行容器
 
 ```bash
-# MySQL 模式（默认）
+# MySQL 模式（默认）—— 使用公网镜像地址
 docker run -d --name prod-call-stats \
   -p 8089:8089 \
   -e DATA_SOURCE=mysql \
@@ -64,7 +78,17 @@ docker run -d --name prod-call-stats \
   -e MYSQL_PASSWORD=root123 \
   -e MYSQL_DB=dev \
   --restart unless-stopped \
-  prod-call-stats:latest
+  codo-cr-registry.cn-shenzhen.cr.aliyuncs.com/codotech/prod-call-stats:latest
+
+# 在阿里云 VPC 内运行（推荐使用 vpc 端点）
+docker run -d --name prod-call-stats \
+  -p 8089:8089 \
+  -e DATA_SOURCE=mysql \
+  -e MYSQL_HOST=xxx -e MYSQL_PORT=30306 \
+  -e MYSQL_USER=root -e MYSQL_PASSWORD=root123 \
+  -e MYSQL_DB=dev \
+  --restart unless-stopped \
+  codo-cr-registry-vpc.cn-shenzhen.cr.aliyuncs.com/codotech/prod-call-stats:latest
 
 # CSV 模式：把 CSV 文件挂载进容器，并通过 CSV_PATH 指向容器内路径
 docker run -d --name prod-call-stats \
@@ -72,7 +96,7 @@ docker run -d --name prod-call-stats \
   -e DATA_SOURCE=csv \
   -e CSV_PATH=/data/接口调用次数分析.csv \
   -v /home/huyujing/IdeaProjects/duckle-demo-v2/output:/data:ro \
-  prod-call-stats:latest
+  codo-cr-registry.cn-shenzhen.cr.aliyuncs.com/codotech/prod-call-stats:latest
 
 # 启用 Token 校验
 docker run -d --name prod-call-stats \
@@ -83,7 +107,7 @@ docker run -d --name prod-call-stats \
   -e MYSQL_USER=root \
   -e MYSQL_PASSWORD=root123 \
   -e TOKEN=your-token-here \
-  prod-call-stats:latest
+  codo-cr-registry.cn-shenzhen.cr.aliyuncs.com/codotech/prod-call-stats:latest
 ```
 
 ### 常用运维命令
